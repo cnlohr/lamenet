@@ -11,7 +11,7 @@
 
 
 int ifid1, ifid2;
-volatile int c1, c2;
+volatile int c1, c2, c1b, c2b;
 
 int PACKETPASS = 80; //Percent
 int DELAYRAND = 25;
@@ -52,6 +52,7 @@ void MakeLE32( uint32_t value, uint8_t * output )
 
 void * TXF( void * px )
 {
+	volatile int * counter = (px==chain1)?&c1b:&c2b;
 	volatile struct TXChain * t = (struct TXChain*)px;
 	while(1)
 	{
@@ -77,10 +78,11 @@ void * TXF( void * px )
 				fwrite( hdr, 16+dlen, 1, pcaplog );
 			}
 
-			send( t->socket, t->data, t->size, 0 );
+			send( t->socket, t->data, t->size, MSG_NOSIGNAL );
+			(*counter)++;
 		}
 		while( !t->next || allstop ) usleep( 1000 );
-		
+
 		volatile struct TXChain * last = t;
 		t = t->next;
 		free( last->data );
@@ -99,7 +101,7 @@ void HandleSend( struct TXChain ** c, int socket, uint8_t * data, int length )
 	next->socket = socket;
 	next->data = malloc( length );
 	memcpy( next->data, data, length );
-	int wait = BASE_DELAY+ (rand()%ADD_DELAY);
+	int wait = BASE_DELAY + (ADD_DELAY?(rand()%ADD_DELAY):0);
 	next->release_at_us = tv.tv_usec + wait*1000;
 	next->release_at_s = tv.tv_sec + next->release_at_us/1000000;
 	next->release_at_us %= 1000000;
@@ -114,10 +116,8 @@ void rxfn1( void * id, void * rr, uint8_t * data, int dlen )
 	c1++;
 	while( allstop ) usleep(1000);
 	if( ( rand()%100 ) > PACKETPASS ) return;
-	usleep( 1000*(rand()%DELAYRAND) );
-
+	if( DELAYRAND ) usleep( 1000*(rand()%DELAYRAND) );
 	HandleSend( &chain2, ifid2, data, dlen );
-
 }
 
 void rxfn2( void * id, void * rr, uint8_t * data, int dlen )
@@ -125,24 +125,27 @@ void rxfn2( void * id, void * rr, uint8_t * data, int dlen )
 	c2++;
 	if( ( rand()%100 ) > PACKETPASS ) return;
 	while( allstop ) usleep(1000);
-	usleep( 1000*(rand()%DELAYRAND) );
+	if( DELAYRAND ) usleep( 1000*(rand()%DELAYRAND) );
 	HandleSend( &chain1, ifid1, data, dlen );
 }
 
 void * starter( void * v )
 {
-		librawp_receive( ifid2, rxfn2, 0, 0 );
+	librawp_receive( ifid2, rxfn2, 0, 0 );
 }
 void * watcher( void * v )
 {
 	while(1)
 	{
-		fprintf( stderr, "%d/%d\n", c1, c2 );
+		fprintf( stderr, "%d/%d  %d/%d\n", c1, c1b, c2, c2b );
 
 		fflush( stdout );
-		allstop = 1;
-		usleep( 1000 * (rand()%ALLSTOPRAND) );
-		allstop = 0;
+		if( ALLSTOPRAND )
+		{
+			allstop = 1;
+			usleep( 1000 * (rand()%ALLSTOPRAND) );
+			allstop = 0;
+		}
 		sleep(1);
 	}
 }
